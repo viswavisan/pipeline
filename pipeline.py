@@ -13,24 +13,24 @@ class deployment_pipeline:
     def __init__(self, jira_id):
         self.jira_id = jira_id
         self.REPO_URL="https://github.com/viswavisan/fastapi_demo1.git"
-        self.REPO_NAME='fastapi-demo'
+        self.REPO_NAME='fastapi-demo1'
         self.BRANCH='main'
         self.container_name=f'{self.REPO_NAME}-container'
         self.app_name=f'{self.REPO_NAME}'
         self.namespace = f'{self.REPO_NAME}-namespace'
         self.deployment_name=f'{self.REPO_NAME}-deployment' 
         self.service_name=f'{self.REPO_NAME}-service'
-        self.image_name=f'{self.REPO_NAME}:latest'
+        self.image_name=f'ghcr.io/viswavisan/{self.REPO_NAME}:latest'
         self.port=8000
+        self.d_client = docker.from_env()
 
     def run(self):
 
         self.build_latest_image()
+        self.deploy_in_docker()
         # self.kubernet_deployment()
         # self.check_service_status()
-    
-
-
+        # self.check_application_status()
 
     def build_latest_image(self):
         print('building image...')
@@ -41,25 +41,27 @@ class deployment_pipeline:
         else:
             git.Repo.clone_from(self.REPO_URL,self.REPO_NAME, branch=self.BRANCH)
 
-        d_client = docker.from_env()
-        d_client.images.build(path='./'+self.REPO_NAME, tag=self.app_name)
-        # push to ECR
-        # d_client.images.push(self.image_name)
+        self.d_client.login(username='viswavisan', password='', registry='ghcr.io')
+        self.d_client.images.build(path='./'+self.REPO_NAME, tag=self.image_name)
+        
+        push_response = self.d_client.images.push(self.image_name, stream=True, decode=True)
+        for line in push_response:print(line) 
         
         #Run in docker
+    def deploy_in_docker(self):
         try:
-            existing_container = d_client.containers.get(self.container_name)
+            existing_container = self.d_client.containers.get(self.container_name)
             if existing_container:existing_container.remove(force=True)
         except:pass
 
-        for container in d_client.containers.list():
+        for container in self.d_client.containers.list():
             if container.attrs['NetworkSettings']['Ports']:
                 port_mapping = f"{self.port}/tcp"
                 if port_mapping in container.attrs['NetworkSettings']['Ports']:
                     container.stop()
                     container.remove(force=True)
 
-        d_client.containers.run(self.app_name, detach=True, name=self.container_name, ports={'8000/tcp': 8000})
+        self.d_client.containers.run(self.app_name, detach=True, name=self.container_name, ports={'8000/tcp': 8000})
 
     def kubernet_deployment(self):
         print('deployment start...')
@@ -97,24 +99,19 @@ class deployment_pipeline:
             core_v1.create_namespaced_service(namespace=self.namespace, body=service)
 
     def check_service_status(self):
-        try:
-            pods = client.CoreV1Api().list_namespaced_pod(self.namespace, label_selector=f'app={self.app_name}')
-            for pod in pods.items:
-                if pod.status.phase != "Running":
-                    print( {"status": "error", "message": f"Pod {pod.metadata.name} is not running."})
+        pods = client.CoreV1Api().list_namespaced_pod(self.namespace, label_selector=f'app={self.app_name}')
+        for pod in pods.items:
+            if pod.status.phase != "Running":print( {"status": "error", "message": f"Pod {pod.metadata.name} is not running."})
+        service = client.CoreV1Api().read_namespaced_service(self.service_name, self.namespace)
+        if not service:print( {"status": "error", "message": "Service not running"})
 
-            service = client.CoreV1Api().read_namespaced_service(self.service_name, self.namespace)
-            if service:
-                node_ip = "localhost"
-                response = requests.get(f'http://{node_ip}:{self.port}/main')
-                if response.status_code == 200:
-                    # jira.transition_issue(self.jira_id, '51')
-                    print({"status": "success", "message": "Service is up and running."})
-                else:print( {"status": "error", "message": f"Service returned status code: {response.status_code}"})
+    def check_application_status(self):
+        time.sleep(3)
+        node_ip = "localhost"
+        response = requests.get(f'http://{node_ip}:{self.port}/main')
+        if response.status_code == 200:print({"status": "success", "message": "Service is up and running."})
+        else:print( {"status": "error", "message": f"Service returned status code: {response.status_code}"})
                 
-        except Exception as e:
-            print( {"status": "error", "message": str(e)})
 
-
-# if __name__ == "__main__":
-    # deployment_pipeline('PPPDRP-6395').run()
+if __name__ == "__main__":
+    deployment_pipeline('PPPDRP-6395').run()
