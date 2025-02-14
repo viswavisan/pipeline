@@ -116,5 +116,5 @@ class deployment_pipeline:
             print( {"status": "error", "message": str(e)})
 
 
-if __name__ == "__main__":
+# if __name__ == "__main__":
     # deployment_pipeline('PPPDRP-6395').run()
