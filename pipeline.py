@@ -117,4 +117,4 @@ class deployment_pipeline:
 
 
 if __name__ == "__main__":
-    deployment_pipeline('PPPDRP-6395').run()
+    # deployment_pipeline('PPPDRP-6395').run()
