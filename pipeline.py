@@ -4,36 +4,43 @@ import subprocess
 import git
 import docker
 from kubernetes import client, config
-from jira import JIRA
-
-
-
 
 class deployment_pipeline:
-    def __init__(self, jira_id):
-        self.jira_id = jira_id
-        self.REPO_URL="https://github.com/viswavisan/fastapi_demo1.git"
-        self.REPO_NAME='fastapi-demo1'
+    def __init__(self):
+        
+        self.build='local'
+        if self.build=='local':self.container_path=''
+        else:self.container_path="ghcr.io/viswavisan/"
+        self.deployment_type='docker'
+
+        self.REPO_NAME='react_demo1'
+        self.REPO_URL=f"https://github.com/viswavisan/{self.REPO_NAME}.git"
         self.BRANCH='main'
+
+        self.expose_port=8000
+        self.port=80 #(for python 8000/ for node 80)
+
+        self.image_name=f'{self.container_path}{self.REPO_NAME}:latest' 
+        print(self.image_name)
         self.container_name=f'{self.REPO_NAME}-container'
         self.app_name=f'{self.REPO_NAME}'
         self.namespace = f'{self.REPO_NAME}-namespace'
         self.deployment_name=f'{self.REPO_NAME}-deployment' 
         self.service_name=f'{self.REPO_NAME}-service'
-        self.image_name=f'ghcr.io/viswavisan/{self.REPO_NAME}:latest'
-        self.port=8000
+    
         self.d_client = docker.from_env()
 
     def run(self):
-
+        self.pull_latest_code()
         self.build_latest_image()
-        self.deploy_in_docker()
-        # self.kubernet_deployment()
-        # self.check_service_status()
-        # self.check_application_status()
-
-    def build_latest_image(self):
-        print('building image...')
+        if self.deployment_type=='docker':self.deploy_in_docker()
+        elif self.deployment_type=='kubernets':
+            self.kubernet_deployment()
+            self.check_service_status()
+        self.check_application_status()
+    
+    def pull_latest_code(self):
+        print('pulling latest code from repository')
         if os.path.exists(self.REPO_NAME):
             repo = git.Repo(self.REPO_NAME)
             repo.git.checkout(self.BRANCH)
@@ -41,27 +48,32 @@ class deployment_pipeline:
         else:
             git.Repo.clone_from(self.REPO_URL,self.REPO_NAME, branch=self.BRANCH)
 
-        self.d_client.login(username='viswavisan', password='', registry='ghcr.io')
-        self.d_client.images.build(path='./'+self.REPO_NAME, tag=self.image_name)
+    def build_latest_image(self):
+        print('building image...')
+        try:
+            self.d_client.images.build(path='./'+self.REPO_NAME, tag=self.image_name)
+        except Exception as e: print(str(e))
+
+        if self.build!='local':
+            # self.d_client.login(username='viswavisan', password='', registry='ghcr.io') 
+            push_response = self.d_client.images.push(self.image_name, stream=True, decode=True)
+            for line in push_response:print(line) 
         
-        push_response = self.d_client.images.push(self.image_name, stream=True, decode=True)
-        for line in push_response:print(line) 
-        
-        #Run in docker
     def deploy_in_docker(self):
+        print('deployment started in docker')
         try:
             existing_container = self.d_client.containers.get(self.container_name)
             if existing_container:existing_container.remove(force=True)
+        
+            for container in self.d_client.containers.list():
+                if container.attrs['NetworkSettings']['Ports']:
+                    port_mapping = f"{self.port}/tcp"
+                    if port_mapping in container.attrs['NetworkSettings']['Ports']:
+                        container.stop()
+                        container.remove(force=True)
         except:pass
 
-        for container in self.d_client.containers.list():
-            if container.attrs['NetworkSettings']['Ports']:
-                port_mapping = f"{self.port}/tcp"
-                if port_mapping in container.attrs['NetworkSettings']['Ports']:
-                    container.stop()
-                    container.remove(force=True)
-
-        self.d_client.containers.run(self.app_name, detach=True, name=self.container_name, ports={'8000/tcp': 8000})
+        self.d_client.containers.run(self.app_name, detach=True, name=self.container_name, ports={f'{self.port}/tcp': self.expose_port})
 
     def kubernet_deployment(self):
         print('deployment start...')
@@ -107,11 +119,11 @@ class deployment_pipeline:
 
     def check_application_status(self):
         time.sleep(3)
+        print('checking application status')
         node_ip = "localhost"
-        response = requests.get(f'http://{node_ip}:{self.port}/main')
+        response = requests.get(f'http://{node_ip}:{self.expose_port}/main')
         if response.status_code == 200:print({"status": "success", "message": "Service is up and running."})
         else:print( {"status": "error", "message": f"Service returned status code: {response.status_code}"})
                 
-
 if __name__ == "__main__":
-    deployment_pipeline('PPPDRP-6395').run()
+    deployment_pipeline().run()
